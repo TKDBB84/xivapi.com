@@ -2,10 +2,10 @@
 
 namespace App\Controller;
 
+use App\Common\Service\Redis\Redis;
 use App\Service\Content\LodestoneCharacter;
 use App\Service\LodestoneQueue\CharacterConverter;
 use Lodestone\Api;
-use Lodestone\Exceptions\LodestoneNotFoundException;
 use Lodestone\Exceptions\LodestonePrivateException;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
@@ -24,13 +24,20 @@ class LodestoneCharacterController extends AbstractController
             throw new NotAcceptableHttpException('You must provide a name to search.');
         }
 
-        return $this->json(
-            (new Api())->character()->search(
-                $request->get('name'),
-                ucwords($request->get('server')),
-                $request->get('page') ?: 1
-            )
+        $listView = (new Api())->character()->search(
+            $request->get('name'),
+            ucwords($request->get('server')),
+            $request->get('page') ?: 1
         );
+        if (isset($listView, $listView->Results)) {
+            foreach ($listView->Results as $item) {
+                if (isset($item->Lang)) {
+                    Redis::cache()->set($item->ID . '_lang', $item->Lang, 10 * 60);
+                }
+            }
+        }
+
+        return $this->json($listView);
     }
 
     /**
@@ -89,10 +96,12 @@ class LodestoneCharacterController extends AbstractController
             'PvPTeam'            => null,
         ];
 
+        if ($charLang = Redis::cache()->get($lodestoneId.'_lang')) {
+            $response->Character->Lang = $charLang;
+        }
         // fc id + pvp team id
         $fcId  = $response->Character->FreeCompanyId;
         $pvpId = $response->Character->PvPTeamId;
-
         // ensure bio is UT8
         $response->Character->Bio = mb_convert_encoding($response->Character->Bio, 'UTF-8', 'UTF-8');
 
